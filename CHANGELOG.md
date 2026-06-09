@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **改造 C：拆分镜 + AI 出图（穷人版 ViMax）** （feat/mpt-enhancement-2026q2）
+  - `app/services/ai_image.py`：AI 图像生成抽象层
+    - `ImageProvider` Protocol + `OpenAICompatibleImageProvider` 默认实现
+    - 支持 openai / aihubmix / minimax（MiniMax）/ oneapi / moonshot / deepseek / groq 等 OpenAI 兼容协议
+    - 帧 base64 inline 落盘，零外网依赖
+    - 错误体系：`AIImageError` / `ImageProviderUnavailableError` / `ImageGenerationError`
+  - `app/services/storyboard.py`：脚本 → 分镜拆分
+    - 每个 scene 含 narration / visual_desc / image_prompt / keywords / target_duration
+    - `Scene` 用 `@dataclass(frozen=True)`，duration 自动 clamp [2, 15]
+    - 失败重试，Pydantic 校验
+  - `app/services/consistency_filter.py`：VLM 选最佳候选图
+    - `parse_best_index()` JSON + 正则双轨容错
+    - VLM 失败一律降级返第一张，绝不挂流程
+  - `app/services/material.py`：`download_images_ai()`
+    - 每分镜生成 N 张候选 → VLM 选最佳 → 落盘 → 返回路径列表
+    - 单分镜失败不影响整批，audio_duration 到位即停
+  - `app/services/task.py`：`get_video_materials()` 加 `ai_image` 分支
+    - 拆分镜 → AI 出图 → `preprocess_video()` Ken Burns 转 mp4
+    - **零图片时自动降级 Pexels**（用原 video_terms 兜底）
+  - `app/models/schema.py`：`VideoParams` 加 `image_provider` / `image_model` / `image_n_candidates` / `image_size` 字段
+  - `webui/Main.py`：video_source 下拉框加 `ai_image` + `local_search` 两个选项
+    - 选 ai_image 后显示 image_provider 输入框 + 候选张数 slider
+  - `webui/i18n/{zh,en,ru,de,vi,tr,pt}.json`：7 个语言全部补齐 6 个新 i18n key
+  - `test/services/test_ai_image.py`：39 个单元测试
+    - ai_image provider 注册表 / 缺 key / OpenAI 兼容调用 / b64 落盘
+    - storyboard 解析 / clamp / 校验 / 重试
+    - consistency_filter best_index / VLM 失败降级
+    - download_images_ai 主链路 / 多候选 VLM 选 / audio_duration 停止 / 单分镜失败继续
+    - task.get_video_materials ai_image 分支 / 零图降级 Pexels
+
 - **改造 D：本地素材库智能化（AI 自动打标 + 主题包 + 增量扫描）** （feat/mpt-enhancement-2026q2）
   - `app/services/auto_tagger.py`：单视频自动打标
     - ffmpeg 抽 N 帧（开头/中间/结尾均匀分布，跳过 0% 和 100% 边界）

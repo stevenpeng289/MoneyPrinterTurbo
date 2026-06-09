@@ -111,6 +111,11 @@ class VideoParams(BaseModel):
     custom_system_prompt: str = Field(default="", max_length=8000)
     # 改造 B：套用行业脚本模板。填 id 时优先于 custom_system_prompt。
     template_id: Optional[str] = Field(default=None, max_length=64)
+    # 改造 C：AI 出图相关字段（video_source == "ai_image" 时生效）
+    image_provider: Optional[str] = Field(default="", max_length=32)
+    image_model: Optional[str] = Field(default="", max_length=64)
+    image_n_candidates: int = Field(default=1, ge=1, le=8)
+    image_size: Optional[str] = Field(default="1024x1024", max_length=16)
 
 
 class SubtitleRequest(BaseModel):

@@ -395,6 +395,105 @@ def download_videos(
     return video_paths
 
 
+# ----------------------------------------------------------------------
+# 改造 C：AI 出图（拆分镜 → 每分镜生成 N 张 → VLM 选最佳）
+# ----------------------------------------------------------------------
+
+
+def download_images_ai(
+    task_id: str,
+    scenes: list,
+    *,
+    audio_duration: float = 0.0,
+    n_candidates: int = 1,
+    image_provider: str = "",
+    image_size: str = "1024x1024",
+    select_best_caller=None,
+) -> list[str]:
+    """根据分镜列表用 AI 出图，返回本地图片路径列表（兼容 preprocess_video 图片分支）。
+
+    Args:
+        task_id:             用于落盘目录推断。
+        scenes:              `storyboard.Scene` 列表（含 image_prompt / visual_desc / target_duration）。
+        audio_duration:      累积时长上限（与 download_videos 一致）；达到即停。
+        n_candidates:        每分镜生成几张候选。1 = 不调 VLM。
+        image_provider:      传给 ai_image.get_provider；空字符串走默认。
+        image_size:          OpenAI 图像 size 字符串，如 "1024x1024" / "1024x1792"。
+        select_best_caller:  VLM caller，n_candidates>1 时用来从候选里选最佳。
+                             为 None 时取 `llm_multimodal.get_default_tag_caller()`。
+
+    失败的分镜不会抛错，仅 log，并跳过——保证整批流程不被单个分镜卡住。
+    上层（task.py）应根据返回长度判断是否要 fallback 到 Pexels。
+    """
+    from app.services import ai_image, consistency_filter
+    from app.services.llm_multimodal import get_default_tag_caller
+
+    if not scenes:
+        return []
+
+    material_directory = config.app.get("material_directory", "").strip()
+    if material_directory == "task" or not material_directory or not os.path.isdir(
+        material_directory
+    ):
+        material_directory = utils.task_dir(task_id)
+
+    if select_best_caller is None and n_candidates > 1:
+        try:
+            select_best_caller = get_default_tag_caller()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"ai_image: no VLM caller available, will pick first candidate: {exc}"
+            )
+            select_best_caller = None
+
+    image_paths: list[str] = []
+    accumulated = 0.0
+
+    for scene in scenes:
+        prompt = getattr(scene, "image_prompt", "") or ""
+        visual_desc = getattr(scene, "visual_desc", "") or prompt
+        target_duration = float(getattr(scene, "target_duration", 5.0))
+        if not prompt:
+            logger.warning(f"ai_image: scene {getattr(scene, 'scene_id', '?')} has empty image_prompt, skip")
+            continue
+
+        try:
+            candidates = ai_image.generate_image(
+                prompt=prompt,
+                n=n_candidates,
+                size=image_size,
+                output_dir=material_directory,
+                provider_key=image_provider,
+            )
+        except ai_image.AIImageError as exc:
+            logger.warning(
+                f"ai_image: scene {getattr(scene, 'scene_id', '?')} generation failed: {exc}, skip"
+            )
+            continue
+        if not candidates:
+            continue
+
+        if len(candidates) > 1 and select_best_caller is not None:
+            chosen = consistency_filter.select_best_image(
+                candidates=candidates,
+                visual_desc=visual_desc,
+                vlm_caller=select_best_caller,
+            )
+        else:
+            chosen = candidates[0]
+
+        image_paths.append(chosen.local_path)
+        accumulated += target_duration
+        if audio_duration > 0 and accumulated >= audio_duration:
+            logger.info(
+                f"ai_image: hit audio_duration target {audio_duration}s with {len(image_paths)} images, stop"
+            )
+            break
+
+    logger.success(f"ai_image: produced {len(image_paths)} images")
+    return image_paths
+
+
 if __name__ == "__main__":
     download_videos(
         "test123", ["Money Exchange Medium"], audio_duration=100, source="pixabay"

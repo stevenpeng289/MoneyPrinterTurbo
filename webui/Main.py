@@ -822,15 +822,21 @@ with middle_panel:
             (tr("Pexels"), "pexels"),
             (tr("Pixabay"), "pixabay"),
             (tr("Local file"), "local"),
+            (tr("Local Search (改造 D)"), "local_search"),
+            (tr("AI Image (改造 C)"), "ai_image"),
             (tr("TikTok"), "douyin"),
             (tr("Bilibili"), "bilibili"),
             (tr("Xiaohongshu"), "xiaohongshu"),
         ]
 
         saved_video_source_name = config.app.get("video_source", "pexels")
-        saved_video_source_index = [v[1] for v in video_sources].index(
-            saved_video_source_name
-        )
+        saved_source_ids = [v[1] for v in video_sources]
+        if saved_video_source_name in saved_source_ids:
+            saved_video_source_index = saved_source_ids.index(
+                saved_video_source_name
+            )
+        else:
+            saved_video_source_index = 0
 
         selected_index = st.selectbox(
             tr("Video Source"),
@@ -840,6 +846,23 @@ with middle_panel:
         )
         params.video_source = video_sources[selected_index][1]
         config.app["video_source"] = params.video_source
+
+        # 改造 C：AI 出图选项
+        if params.video_source == "ai_image":
+            params.image_provider = st.text_input(
+                tr("AI Image Provider"),
+                value=params.image_provider or "",
+                key="image_provider",
+                help=tr("AI Image Provider Help"),
+            ).strip()
+            params.image_n_candidates = st.slider(
+                tr("AI Image Candidates per Scene"),
+                min_value=1,
+                max_value=4,
+                value=params.image_n_candidates or 1,
+                key="image_n_candidates",
+                help=tr("AI Image Candidates Help"),
+            )
 
         if params.video_source == "local":
             # Streamlit 的文件类型校验对扩展名大小写敏感，这里同时放行大小写两种形式。

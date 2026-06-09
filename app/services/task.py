@@ -178,6 +178,69 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             )
             return None
         return [material_info.url for material_info in materials]
+    elif params.video_source == "ai_image":
+        # 改造 C：AI 出图通道——先按 script 拆分镜，再每分镜生成图，VLM 选最佳。
+        # 生成的 PNG 直接走 video.preprocess_video 图片分支（Ken Burns 转 mp4）。
+        logger.info("\n\n## generating ai_image materials from script storyboard")
+        from app.models.schema import MaterialInfo
+        from app.services import storyboard as sb
+
+        script = (params.video_script or "").strip()
+        if not script:
+            sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+            logger.error("ai_image mode requires non-empty video_script")
+            return None
+
+        try:
+            scenes = sb.generate_storyboard(
+                script=script,
+                llm_caller=_long_storyboard_llm_caller_or_default(),
+                target_total_duration=audio_duration * params.video_count
+                if audio_duration > 0
+                else 60.0,
+            )
+        except sb.StoryboardError as exc:
+            logger.error(f"ai_image: storyboard generation failed: {exc}")
+            sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+            return None
+
+        image_paths = material.download_images_ai(
+            task_id=task_id,
+            scenes=scenes,
+            audio_duration=audio_duration * params.video_count,
+            n_candidates=getattr(params, "image_n_candidates", 1) or 1,
+            image_provider=getattr(params, "image_provider", "") or "",
+            image_size=getattr(params, "image_size", "1024x1024") or "1024x1024",
+        )
+
+        if not image_paths:
+            logger.warning(
+                "ai_image: 0 images generated; falling back to Pexels with original keywords"
+            )
+            # 失败降级：复用 download_videos 走 Pexels
+            return material.download_videos(
+                task_id=task_id,
+                search_terms=video_terms or [],
+                source="pexels",
+                video_aspect=params.video_aspect,
+                video_contact_mode=params.video_concat_mode,
+                audio_duration=audio_duration * params.video_count,
+                max_clip_duration=params.video_clip_duration,
+            ) or None
+
+        # 用 preprocess_video 的图片分支（自动 Ken Burns 转 mp4）
+        materials = video.preprocess_video(
+            materials=[
+                MaterialInfo(provider="ai_image", url=p, duration=0)
+                for p in image_paths
+            ],
+            clip_duration=params.video_clip_duration,
+        )
+        if not materials:
+            sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+            logger.error("ai_image: preprocess_video returned 0 materials")
+            return None
+        return [m.url for m in materials]
     else:
         logger.info(f"\n\n## downloading videos from {params.video_source}")
         downloaded_videos = material.download_videos(
@@ -196,6 +259,13 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             )
             return None
         return downloaded_videos
+
+
+def _long_storyboard_llm_caller_or_default():
+    """复用 llm._long_storyboard_llm_caller（同样的 system+user 合并通道）。"""
+    from app.services import llm
+
+    return llm._long_storyboard_llm_caller  # noqa: SLF001
 
 
 def generate_final_videos(
