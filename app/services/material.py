@@ -5,6 +5,7 @@ from typing import List
 from urllib.parse import urlencode
 
 import requests
+import yaml
 from loguru import logger
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
@@ -165,7 +166,106 @@ def search_videos_pixabay(
     return []
 
 
+def search_videos_local(
+    search_term: str,
+    minimum_duration: int,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+) -> List[MaterialInfo]:
+    """
+    扫描 material_directory 下的本地视频，按 search_term 与同名 yaml 里的 tags
+    做大小写无关的子串匹配，返回命中的 MaterialInfo 列表。
+
+    每个本地视频需配同名 .yaml 描述文件，包含 tags 列表（英文 tag，跟 LLM 生成的
+    video_terms 一致）。命中的视频以 file:// 协议返回，由 save_video 短路处理。
+    """
+    material_directory = config.app.get("material_directory", "").strip()
+    if material_directory == "task" or not os.path.isdir(material_directory):
+        logger.warning(
+            f"local_search: material_directory 无效或未设置: '{material_directory}', "
+            f"跳过本次搜索"
+        )
+        return []
+
+    search_term_lower = search_term.lower().strip()
+    video_items: List[MaterialInfo] = []
+
+    for root, _, files in os.walk(material_directory):
+        for filename in files:
+            if not filename.lower().endswith(".mp4"):
+                continue
+            video_path = os.path.abspath(os.path.join(root, filename))
+            yaml_path = os.path.splitext(video_path)[0] + ".yaml"
+
+            # 1. 读 yaml tags
+            if not os.path.isfile(yaml_path):
+                logger.debug(f"local_search: {filename} 无 yaml 描述, 跳过")
+                continue
+            try:
+                with open(yaml_path, "r", encoding="utf-8") as f:
+                    meta = yaml.safe_load(f) or {}
+                tags = meta.get("tags") or []
+                if not isinstance(tags, list):
+                    logger.warning(f"local_search: {yaml_path} tags 不是 list, 跳过")
+                    continue
+            except Exception as e:
+                logger.warning(f"local_search: 解析 {yaml_path} 失败: {e}, 跳过")
+                continue
+
+            # 2. 匹配 search_term（任一 tag 与 search_term 双向子串）
+            hit = False
+            for tag in tags:
+                tag_str = str(tag).lower().strip()
+                if not tag_str:
+                    continue
+                if search_term_lower in tag_str or tag_str in search_term_lower:
+                    hit = True
+                    break
+            if not hit:
+                continue
+
+            # 3. 读真实 duration，过滤掉太短的视频
+            clip = None
+            try:
+                clip = VideoFileClip(video_path)
+                duration = clip.duration
+            except Exception as e:
+                logger.warning(f"local_search: 视频 {video_path} 损坏: {e}, 跳过")
+                continue
+            finally:
+                if clip is not None:
+                    try:
+                        clip.close()
+                    except Exception:
+                        pass
+            if duration < minimum_duration:
+                logger.debug(
+                    f"local_search: {filename} duration={duration:.1f}s "
+                    f"< {minimum_duration}s, 跳过"
+                )
+                continue
+
+            # 4. 构造 MaterialInfo（file:// 协议由 save_video 短路处理）
+            item = MaterialInfo()
+            item.provider = "local"
+            item.url = f"file://{video_path}"
+            item.duration = duration
+            video_items.append(item)
+            logger.info(
+                f"local_search: 命中 {filename} (duration={duration:.1f}s, "
+                f"search_term='{search_term}')"
+            )
+
+    return video_items
+
+
 def save_video(video_url: str, save_dir: str = "") -> str:
+    # 本地视频（file:// 协议）：直接返回绝对路径，不下载、不改名
+    if video_url.startswith("file://"):
+        local_path = video_url[len("file://"):]
+        if os.path.isfile(local_path) and os.path.getsize(local_path) > 0:
+            return local_path
+        logger.warning(f"save_video: file:// 指向不存在的文件: {local_path}")
+        return ""
     if not save_dir:
         save_dir = utils.storage_dir("cache_videos")
 
@@ -240,6 +340,8 @@ def download_videos(
     search_videos = search_videos_pexels
     if source == "pixabay":
         search_videos = search_videos_pixabay
+    elif source == "local_search":
+        search_videos = search_videos_local
 
     for search_term in search_terms:
         video_items = search_videos(

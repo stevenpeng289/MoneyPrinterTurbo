@@ -34,3 +34,11 @@ debug_*.py
 test_*.py
 !test/services/test_*.py
 streamlit.log
+
+# 本地私有文件（不纳入版本控制）
+# assets/：个人视频素材
+# create_samples.sh：个人 curl 脚本
+# output/：视频产物
+/assets/
+/create_samples.sh
+/output/

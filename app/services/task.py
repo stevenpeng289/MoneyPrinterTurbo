@@ -1,6 +1,8 @@
 import math
 import os.path
 import re
+import shutil
+from datetime import datetime
 from os import path
 
 from loguru import logger
@@ -237,6 +239,19 @@ def generate_final_videos(
             output_file=final_video_path,
             params=params,
         )
+
+        # 复制最终视频到 output 目录，文件名加上生成时间
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        subject = (params.video_subject or "video").strip()
+        # 替换文件名中不允许的字符
+        safe_subject = "".join(
+            c if c not in r'\/:*?"<>|' else "_" for c in subject
+        ).strip()
+        count_suffix = f"_{index}" if params.video_count > 1 else ""
+        output_filename = f"{safe_subject}_{timestamp}{count_suffix}.mp4"
+        output_path = path.join(utils.output_dir(), output_filename)
+        shutil.copy2(final_video_path, output_path)
+        logger.success(f"output video: {output_path}")
 
         _progress += 50 / params.video_count / 2
         sm.state.update_task(task_id, progress=_progress)

@@ -841,7 +841,7 @@ def generate_video(
         # 也可能是实际颜色字符串。统一在这里归一化，避免把 True/False
         # 直接传给 TextClip 后出现不可预期的渲染结果。
         if isinstance(params.text_background_color, bool):
-            return "#000000" if params.text_background_color else None
+            return "#00000080" if params.text_background_color else None
         return params.text_background_color
 
     def create_text_clip(subtitle_item):

@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import socket
 
@@ -156,7 +157,23 @@ def save_config():
         f.write(toml.dumps(_cfg))
 
 
-_cfg = load_config()
+_ENV_PLACEHOLDER = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+
+
+def _expand_env(value):
+    """递归把 ${VAR} 占位符替换成 os.environ 的值。找不到则保持原样。"""
+    if isinstance(value, str):
+        return _ENV_PLACEHOLDER.sub(
+            lambda m: os.environ.get(m.group(1), m.group(0)), value
+        )
+    if isinstance(value, list):
+        return [_expand_env(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _expand_env(v) for k, v in value.items()}
+    return value
+
+
+_cfg = _expand_env(load_config())
 app = _cfg.get("app", {})
 whisper = _cfg.get("whisper", {})
 proxy = _cfg.get("proxy", {})
