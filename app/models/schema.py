@@ -504,3 +504,41 @@ class LongStoryboardResponse(BaseResponse):
                 },
             },
         }
+
+
+######################################################################################################
+# 改造 D：本地素材库智能化（请求/响应模型）
+######################################################################################################
+class MaterialPackInfo(BaseModel):
+    """单个主题包信息。"""
+
+    id: str
+    name: str
+    description: str
+    category: str
+    language: str = "en"
+    recommended_clip_duration: int = 5
+    search_term_count: int = 0
+    path: str = ""
+
+
+class MaterialPackListResponse(BaseResponse):
+    data: Optional[dict] = None
+
+
+class MaterialScanRequest(BaseModel):
+    """触发素材目录自动打标的请求体。
+
+    `base_dir` 是相对项目根的目录（如 `resource/material_packs/cross_border_logistics`）
+    或在 `material_directory` 内的子目录。controller 会做路径白名单校验。
+    """
+
+    base_dir: str = Field(..., min_length=1, max_length=500)
+    overwrite: bool = False
+    num_frames: int = Field(default=3, ge=1, le=6)
+    max_videos: Optional[int] = Field(default=50, ge=1, le=10_000)
+    model_label: str = Field(default="", max_length=128)
+
+
+class MaterialScanResponse(BaseResponse):
+    data: Optional[dict] = None

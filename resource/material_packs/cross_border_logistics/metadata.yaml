@@ -1,0 +1,47 @@
+id: cross_border_logistics
+name: 跨境物流行业素材包
+description: 仓储 / 海运 / 海外仓 / 跨境电商场景的精选短视频素材，适合口播 / 科普 / 案例类视频。
+category: industry
+language: en
+recommended_clip_duration: 5
+search_terms:
+  # 仓储
+  - warehouse
+  - forklift
+  - cargo box
+  - pallet
+  - shelving
+  - inventory
+  # 物流
+  - cargo ship
+  - container
+  - truck
+  - freight
+  - logistics worker
+  - delivery van
+  # 跨境
+  - customs
+  - international shipping
+  - global trade
+  - port crane
+  - shipping port
+  - cargo loading
+  # 电商场景
+  - online shopping
+  - delivery package
+  - parcel scanning
+  - ecommerce
+  - smartphone shopping
+  # 数据 / 工具
+  - barcode scanner
+  - inventory tracking
+  - shipping label
+  - tablet warehouse
+suggested_tags_pool:
+  - logistics
+  - warehouse
+  - cross-border
+  - ecommerce
+  - shipping
+  - customs
+  - cargo

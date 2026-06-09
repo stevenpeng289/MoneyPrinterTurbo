@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **改造 D：本地素材库智能化（AI 自动打标 + 主题包 + 增量扫描）** （feat/mpt-enhancement-2026q2）
+  - `app/services/auto_tagger.py`：单视频自动打标
+    - ffmpeg 抽 N 帧（开头/中间/结尾均匀分布，跳过 0% 和 100% 边界）
+    - LLM 调用通过 `TagCaller` 注入（与 RAG 同样的设计模式）
+    - `parse_tags()`：剥 markdown 围栏 / bracket fallback / lowercase 归一化 / dedup / null 跳过
+    - **人工保护**：`<video>.yaml.locked` 文件存在时直接跳过覆盖
+    - 已有 yaml 默认不覆盖（`overwrite=True` 才重打）
+    - 帧文件用临时目录，函数返回自动清理
+  - `app/services/material_scanner.py`：批量增量扫描
+    - cache 文件 `.material_scan_cache.json`，按 mtime 增量
+    - `max_videos` 限流，首次全量扫描可分批跑
+    - 路径白名单走 `file_security.resolve_path_within_directory`
+    - `MaterialScanReport` 五项指标：scanned / tagged / skipped_locked / skipped_unchanged / failed
+  - `app/services/llm_multimodal.py`：默认多模态 caller
+    - OpenAI 兼容 vision API（MiniMax / OpenAI / 月之暗面等都通用）
+    - 帧文件 base64 inline 到 message，零外网托管依赖
+    - 降级模式：API key 不全时自动切到 filename-only fallback
+  - `app/controllers/v1/material.py`：素材库 controller
+    - `GET /api/v1/material-packs`：列出 `resource/material_packs/` 下的主题包
+    - `POST /api/v1/material-scan`：触发自动打标扫描
+  - `app/router.py`：注册 `material.router`
+  - `app/models/schema.py`：`MaterialPackInfo` / `MaterialPackListResponse` / `MaterialScanRequest` / `MaterialScanResponse`
+  - `resource/material_packs/cross_border_logistics/`：内置跨境物流主题包
+    - `metadata.yaml`：27 个 Pexels 搜索词（仓储 / 物流 / 跨境 / 电商 / 数据工具）
+    - `download_pack.py`：批量从 Pexels 拉素材脚本（用户填 API key）
+    - `README.md`：使用说明
+  - `config.example.toml`：`[app]` 加 5 个 auto_tagger 配置项
+    - `auto_tagger_enabled` 默认 false（手动启用，避免误调 LLM 烧 token）
+    - `auto_tagger_num_frames` / `auto_tagger_provider` / `auto_tagger_model_label` / `auto_tagger_max_videos_per_scan`
+  - `test/services/test_material_scanner.py`：26 个单元测试
+    - parse_tags 容错（含 null/dedup/lowercase）
+    - timestamp 计算
+    - yaml 读写兼容 `search_videos_local`
+    - tag_video lock 文件保护 + 已有 yaml 不覆盖
+    - 增量缓存 / overwrite 触发重打标 / max_videos 限流
+    - controller 端到端（启停 / 路径越界 / 成功扫描）
+
 - **改造 A：RAG 长脚本拆分** （feat/mpt-enhancement-2026q2）
   - `app/services/prompts/long_storyboard.py`：长脚本拆分 prompt 模板，严格 JSON 输出约束
     - `LONG_STORYBOARD_SYSTEM_PROMPT`：角色 + 输出规则 + 切分规则 + 质量门

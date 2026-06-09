@@ -271,6 +271,31 @@ max_concurrent_tasks = 5
 max_queued_tasks = 100
 
 
+########## Material Auto-Tagger (改造 D)
+# 自动给本地素材打标，省去手写 yaml 的负担。
+# - 启用后调 multimodal LLM 给 material_directory 下的视频自动生成 tags。
+# - 写入 <video>.yaml，与现有 search_videos_local() 完全兼容。
+# - <video>.yaml.locked 文件存在时跳过覆盖（人工编辑保护）。
+auto_tagger_enabled = false
+
+# 抽几帧给 LLM 看（1-6）。越多越准、token 越贵。
+auto_tagger_num_frames = 3
+
+# 用哪个 multimodal LLM provider。需支持 vision，例如：
+#   gemini  (gemini-2.5-flash 多模态)
+#   openai  (gpt-4o-mini / gpt-4o)
+#   minimax (MiniMax-M3 vision)
+# 留空则跟 llm_provider 一致。
+auto_tagger_provider = ""
+
+# 模型标签，写入 yaml 的 model 字段，便于追溯。留空自动用 provider/model 拼接。
+auto_tagger_model_label = ""
+
+# 单次扫描最多处理几个视频。None / 0 = 不限制。
+# 大规模素材库首次全量扫描可分批跑，避免一次烧太多 token。
+auto_tagger_max_videos_per_scan = 50
+
+
 [whisper]
 # Only effective when subtitle_provider is "whisper"
 
