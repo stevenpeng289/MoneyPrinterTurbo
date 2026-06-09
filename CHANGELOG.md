@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **改造 A：RAG 长脚本拆分** （feat/mpt-enhancement-2026q2）
+  - `app/services/prompts/long_storyboard.py`：长脚本拆分 prompt 模板，严格 JSON 输出约束
+    - `LONG_STORYBOARD_SYSTEM_PROMPT`：角色 + 输出规则 + 切分规则 + 质量门
+    - `build_long_storyboard_prompt()`：动态拼接原文 + 检索上下文
+  - `app/services/rag_storyboard.py`：RAG pipeline 主逻辑
+    - `split_long_text()`：用 `langchain-text-splitters.RecursiveCharacterTextSplitter`，中文友好分隔符
+    - `retrieve_top_k_chunks()`：v1 实现用 n-gram overlap 排序（不引入 chromadb，保持轻量）
+    - `parse_episodes()`：JSON 解析 + 自动剥 markdown 围栏 + bracket fallback + keywords 字符串兼容 + duration clamp [30, 90]
+    - `generate_long_storyboard()`：主入口，注入式 `llm_caller`（便于测试 mock + 避免循环导入）
+    - 完整错误体系：`LongStoryboardError` / `InputTooShortError` / `InputTooLongError` / `LLMOutputParseError` / `EpisodeValidationError`
+    - `@dataclass(frozen=True) EpisodeDraft`：不可变结果对象
+    - 失败自动重试（默认 3 次）
+  - `app/services/llm.py`：`generate_long_storyboard()` 入口
+    - 复用现有 `_generate_response()` 通道，零侵入兼容所有 provider
+  - `app/models/schema.py`：`LongStoryboardRequest` / `EpisodeDetail` / `LongStoryboardResponse`
+    - 输入校验：`text` ∈ [200, 200_000] 字，`chunk_size` ∈ [500, 8000]
+  - `app/controllers/v1/llm.py`：`POST /api/v1/long-storyboard`
+    - 业务错误分流：太短/太长 400，LLM 多次失败 502
+  - `test/services/test_rag_storyboard.py`：33 个单元测试
+    - 切块边界、检索排序、JSON 解析容错、duration clamp、retry 机制、prompt 构造、TestClient 端到端
+
 - **改造 B：行业脚本模板库** （feat/mpt-enhancement-2026q2）
   - `app/services/prompts/templates/`：5 个跨境物流/电商行业脚本模板
     - `cross_border_policy`（政策解读，三段式）

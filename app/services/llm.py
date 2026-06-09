@@ -1102,6 +1102,46 @@ def generate_script_from_template(
     )
 
 
+# ----------------------------------------------------------------------
+# RAG 长脚本（改造 A：复用 _generate_response 通道）
+# ----------------------------------------------------------------------
+
+from app.services import rag_storyboard as _rag  # noqa: E402
+
+
+def _long_storyboard_llm_caller(system_prompt: str, user_prompt: str) -> str:
+    """把 system + user prompt 合并喂给现有 `_generate_response()`。
+
+    `_generate_response()` 只接受单个 prompt 字符串，这里用清晰的两段式分隔，
+    保证模型能区分"角色规则"和"具体任务"。
+    """
+    combined = f"{system_prompt}\n\n---\n\n{user_prompt}"
+    return _generate_response(prompt=combined)
+
+
+def generate_long_storyboard(
+    text: str,
+    *,
+    chunk_size: int = _rag.DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = _rag.DEFAULT_CHUNK_OVERLAP,
+    top_k: int = _rag.DEFAULT_TOP_K,
+    max_retries: int = _rag.DEFAULT_MAX_RETRIES,
+) -> list[_rag.EpisodeDraft]:
+    """RAG 长脚本拆分入口。
+
+    内部用 `app.services.rag_storyboard.generate_long_storyboard()`，
+    并把当前 LLM provider 通过 `_long_storyboard_llm_caller` 注入。
+    """
+    return _rag.generate_long_storyboard(
+        text=text,
+        llm_caller=_long_storyboard_llm_caller,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        top_k=top_k,
+        max_retries=max_retries,
+    )
+
+
 if __name__ == "__main__":
     video_subject = "生命的意义是什么"
     script = generate_script(

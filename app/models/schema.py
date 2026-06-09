@@ -450,3 +450,57 @@ class TemplateDetailResponse(BaseResponse):
                 },
             },
         }
+
+
+######################################################################################################
+# 改造 A：RAG 长脚本（请求/响应模型）
+######################################################################################################
+class LongStoryboardRequest(BaseModel):
+    """长文本拆分多集短视频脚本的请求体。
+
+    `text` 长度限制：
+    - 最短 200 字（短于此 RAG 没意义）
+    - 最长 200_000 字（防 prompt token 撑爆）
+    """
+
+    text: str = Field(..., min_length=200, max_length=200_000)
+    chunk_size: int = Field(default=2000, ge=500, le=8000)
+    chunk_overlap: int = Field(default=200, ge=0, le=1000)
+    top_k: int = Field(default=3, ge=0, le=10)
+    max_retries: int = Field(default=3, ge=1, le=10)
+
+
+class EpisodeDetail(BaseModel):
+    """单集脚本详情。"""
+
+    episode_id: int
+    title: str
+    outline: str
+    narration: str
+    keywords: List[str] = Field(default_factory=list)
+    target_duration: float
+
+
+class LongStoryboardResponse(BaseResponse):
+    data: Optional[dict] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": 200,
+                "message": "success",
+                "data": {
+                    "episode_count": 3,
+                    "episodes": [
+                        {
+                            "episode_id": 1,
+                            "title": "示例标题",
+                            "outline": "本集要点摘要。",
+                            "narration": "完整旁白文本...",
+                            "keywords": ["topic", "keyword"],
+                            "target_duration": 60.0,
+                        }
+                    ],
+                },
+            },
+        }

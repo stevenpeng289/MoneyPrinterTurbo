@@ -4,6 +4,8 @@ from fastapi import HTTPException, Path, Request
 
 from app.controllers.v1.base import new_router
 from app.models.schema import (
+    LongStoryboardRequest,
+    LongStoryboardResponse,
     TemplateDetailResponse,
     TemplateListResponse,
     VideoScriptRequest,
@@ -14,6 +16,7 @@ from app.models.schema import (
     VideoTermsResponse,
 )
 from app.services import llm
+from app.services import rag_storyboard as rag
 from app.utils import utils
 
 # authentication dependency
@@ -133,4 +136,39 @@ def get_script_template(
     except llm.UnknownTemplateError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return utils.get_response(200, _template_to_detail(template))
+
+
+@router.post(
+    "/long-storyboard",
+    response_model=LongStoryboardResponse,
+    summary="Split long-form text into multi-episode storyboards (改造 A RAG)",
+)
+def split_long_storyboard(request: Request, body: LongStoryboardRequest):
+    """把长文本拆成多集短视频脚本（每集 30-90 秒）。
+
+    错误码：
+    - 422：Pydantic 校验失败（输入长度等）
+    - 400：业务校验失败（文本过短/过长、LLM 输出无法解析）
+    - 502：LLM 多次重试仍失败
+    """
+    try:
+        episodes = llm.generate_long_storyboard(
+            text=body.text,
+            chunk_size=body.chunk_size,
+            chunk_overlap=body.chunk_overlap,
+            top_k=body.top_k,
+            max_retries=body.max_retries,
+        )
+    except (rag.InputTooShortError, rag.InputTooLongError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except rag.LongStoryboardError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return utils.get_response(
+        200,
+        {
+            "episode_count": len(episodes),
+            "episodes": [ep.to_dict() for ep in episodes],
+        },
+    )
 
