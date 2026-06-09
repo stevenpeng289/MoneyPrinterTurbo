@@ -3,6 +3,7 @@ import sys
 import webbrowser
 from uuid import UUID, uuid4
 
+import requests
 import streamlit as st
 from loguru import logger
 
@@ -112,6 +113,7 @@ support_locales = [
     "de-DE",
     "en-US",
     "fr-FR",
+    "ru-RU",
     "vi-VN",
     "th-TH",
     "tr-TR",
@@ -216,6 +218,35 @@ def tr(key):
     loc = locales.get(st.session_state["ui_language"], {})
     return loc.get("Translation", {}).get(key, key)
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_groq_model_ids(api_key: str, base_url: str) -> list[str]:
+    if not api_key:
+        return []
+
+    normalized_base_url = (base_url or "https://api.groq.com/openai/v1").strip().rstrip("/")
+    models_url = f"{normalized_base_url}/models"
+
+    try:
+        response = requests.get(
+            models_url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data", [])
+
+        model_ids = []
+        for item in data:
+            if isinstance(item, dict):
+                model_id = item.get("id")
+                if isinstance(model_id, str) and model_id.strip():
+                    model_ids.append(model_id.strip())
+
+        return sorted(set(model_ids))
+    except Exception as e:
+        logger.warning(f"failed to fetch groq models: {e}")
+        return []
 
 # 创建基础设置折叠框
 if not config.app.get("hide_config", False):
@@ -247,9 +278,12 @@ if not config.app.get("hide_config", False):
             # 但配置文件和后端逻辑必须继续使用稳定的小写 provider id。
             # 因此这里显式维护 display label 和 provider id 的映射，避免
             # UI 文案变化污染 `config.app["llm_provider"]`。
+            aihubmix_label = f"AIHubMix ({tr('Recommended')})"
+            if config.ui.get("language") == "zh":
+                aihubmix_label = "AIHubMix（推荐）"
             llm_provider_options = [
                 ("OpenAI", "openai"),
-                ("AIHubMix（推荐）", "aihubmix"),
+                (aihubmix_label, "aihubmix"),
                 ("Moonshot", "moonshot"),
                 ("Azure", "azure"),
                 ("Qwen", "qwen"),
@@ -257,11 +291,13 @@ if not config.app.get("hide_config", False):
                 ("ModelScope", "modelscope"),
                 ("Gemini", "gemini"),
                 ("Grok", "grok"),
+                ("Groq", "groq"),
                 ("Ollama", "ollama"),
                 ("G4f", "g4f"),
                 ("OneAPI", "oneapi"),
                 ("Cloudflare", "cloudflare"),
                 ("ERNIE", "ernie"),
+                ("MiniMax", "minimax"),
                 ("MiMo", "mimo"),
                 ("Pollinations", "pollinations"),
                 ("LiteLLM", "litellm"),
@@ -427,6 +463,20 @@ if not config.app.get("hide_config", False):
                             - **Model Name**: 比如 grok-4.3
                             """
 
+            if llm_provider == "groq":
+                if not llm_model_name:
+                    llm_model_name = "llama-3.3-70b-versatile"
+                if not llm_base_url:
+                    llm_base_url = "https://api.groq.com/openai/v1"
+
+                with llm_helper:
+                    tips = """
+                            ##### Groq 配置说明
+                            - **API Key**: [点击到官网申请](https://console.groq.com/keys)
+                            - **Base Url**: 固定为 https://api.groq.com/openai/v1
+                            - **Model Name**: 比如 llama-3.3-70b-versatile
+                            """
+
             if llm_provider == "deepseek":
                 if not llm_model_name:
                     llm_model_name = "deepseek-chat"
@@ -513,11 +563,45 @@ if not config.app.get("hide_config", False):
             st_llm_base_url = st.text_input(tr("Base Url"), value=llm_base_url)
             st_llm_model_name = ""
             if llm_provider != "ernie":
-                st_llm_model_name = st.text_input(
-                    tr("Model Name"),
-                    value=llm_model_name,
-                    key=f"{llm_provider}_model_name_input",
-                )
+                if llm_provider == "groq":
+                    effective_api_key = st_llm_api_key or llm_api_key
+                    effective_base_url = st_llm_base_url or llm_base_url
+                    groq_models = get_groq_model_ids(
+                        api_key=effective_api_key,
+                        base_url=effective_base_url,
+                    )
+
+                    if groq_models:
+                        selected_index = 0
+                        if llm_model_name in groq_models:
+                            selected_index = groq_models.index(llm_model_name)
+
+                        st_llm_model_name = st.selectbox(
+                            tr("Model Name"),
+                            options=groq_models,
+                            index=selected_index,
+                            key="groq_model_name_select",
+                        )
+                    else:
+                        st_llm_model_name = st.text_input(
+                            tr("Model Name"),
+                            value=llm_model_name,
+                            key="groq_model_name_input",
+                        )
+                        if effective_api_key:
+                            st.caption(
+                                "Unable to load Groq model list right now. You can still enter a model name manually."
+                            )
+                        else:
+                            st.caption(
+                                "Add a Groq API key to load available models automatically."
+                            )
+                else:
+                    st_llm_model_name = st.text_input(
+                        tr("Model Name"),
+                        value=llm_model_name,
+                        key=f"{llm_provider}_model_name_input",
+                    )
                 if st_llm_model_name:
                     config.app[f"{llm_provider}_model_name"] = st_llm_model_name
             else:
@@ -712,7 +796,7 @@ with middle_panel:
             # Streamlit 的文件类型校验对扩展名大小写敏感，这里同时放行大小写两种形式。
             local_file_types = ["mp4", "mov", "avi", "flv", "mkv", "jpg", "jpeg", "png"]
             uploaded_files = st.file_uploader(
-                "Upload Local Files",
+                tr("Upload Local Files"),
                 type=local_file_types + [file_type.upper() for file_type in local_file_types],
                 accept_multiple_files=True,
             )
@@ -801,6 +885,7 @@ with middle_panel:
 
         # 添加TTS服务器选择下拉框
         tts_servers = [
+            (voice.NO_VOICE_NAME, tr("No Voice")),
             ("azure-tts-v1", "Azure TTS V1"),
             ("azure-tts-v2", "Azure TTS V2"),
             ("siliconflow", "SiliconFlow TTS"),
@@ -829,7 +914,11 @@ with middle_panel:
         # 根据选择的TTS服务器获取声音列表
         filtered_voices = []
 
-        if selected_tts_server == "siliconflow":
+        if selected_tts_server == voice.NO_VOICE_NAME:
+            # 无配音是显式模式，只提供一个稳定 sentinel。这样普通 TTS 的空配置
+            # 不会被误判为静音，后端也能继续通过同一条音频/字幕流程生成视频。
+            filtered_voices = [voice.NO_VOICE_NAME]
+        elif selected_tts_server == "siliconflow":
             # 获取硅基流动的声音列表
             filtered_voices = voice.get_siliconflow_voices()
         elif selected_tts_server == "gemini-tts":
@@ -853,12 +942,15 @@ with middle_panel:
                     if "V2" not in v:
                         filtered_voices.append(v)
 
-        friendly_names = {
-            v: v.replace("Female", tr("Female"))
-            .replace("Male", tr("Male"))
-            .replace("Neural", "")
-            for v in filtered_voices
-        }
+        if selected_tts_server == voice.NO_VOICE_NAME:
+            friendly_names = {voice.NO_VOICE_NAME: tr("No Voice")}
+        else:
+            friendly_names = {
+                v: v.replace("Female", tr("Female"))
+                .replace("Male", tr("Male"))
+                .replace("Neural", "")
+                for v in filtered_voices
+            }
 
         saved_voice_name = config.ui.get("voice_name", "")
         saved_voice_name_index = 0
@@ -902,8 +994,12 @@ with middle_panel:
             params.voice_name = ""
             config.ui["voice_name"] = ""
 
-        # 只有在有声音可选时才显示试听按钮
-        if friendly_names and st.button(tr("Play Voice")):
+        # 无配音模式会生成静音占位音频，不展示试听按钮，避免用户误以为需要测试声音。
+        if (
+            friendly_names
+            and selected_tts_server != voice.NO_VOICE_NAME
+            and st.button(tr("Play Voice"))
+        ):
             play_content = params.video_subject
             if not play_content:
                 play_content = params.video_script
@@ -1185,10 +1281,10 @@ with right_panel:
     with st.expander(tr("Click to show API Key management"), expanded=False):
         st.subheader(tr("Manage Pexels and Pixabay API Keys"))
 
-        col1, col2 = st.tabs(["Pexels API Keys", "Pixabay API Keys"])
+        col1, col2 = st.tabs([tr("Pexels API Keys"), tr("Pixabay API Keys")])
 
         with col1:
-            st.subheader("Pexels API Keys")
+            st.subheader(tr("Pexels API Keys"))
             if config.app["pexels_api_keys"]:
                 st.write(tr("Current Keys:"))
                 for key in config.app["pexels_api_keys"]:
@@ -1217,7 +1313,7 @@ with right_panel:
                     st.success(tr("Pexels API Key deleted successfully"))
 
         with col2:
-            st.subheader("Pixabay API Keys")
+            st.subheader(tr("Pixabay API Keys"))
 
             if config.app["pixabay_api_keys"]:
                 st.write(tr("Current Keys:"))
