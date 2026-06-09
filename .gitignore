@@ -39,6 +39,8 @@ streamlit.log
 # assets/：个人视频素材
 # create_samples.sh：个人 curl 脚本
 # output/：视频产物
+# .claude/：Claude Code 会话产物（plans/handoffs/scheduled tasks 等）
 /assets/
 /create_samples.sh
 /output/
+/.claude/

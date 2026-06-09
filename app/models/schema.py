@@ -109,6 +109,8 @@ class VideoParams(BaseModel):
     paragraph_number: int = Field(default=1, ge=1, le=10)
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
+    # 改造 B：套用行业脚本模板。填 id 时优先于 custom_system_prompt。
+    template_id: Optional[str] = Field(default=None, max_length=64)
 
 
 class SubtitleRequest(BaseModel):
@@ -151,7 +153,8 @@ class VideoScriptParams:
       "video_language": "",
       "paragraph_number": 1,
       "video_script_prompt": "",
-      "custom_system_prompt": ""
+      "custom_system_prompt": "",
+      "template_id": null
     }
     """
 
@@ -160,6 +163,8 @@ class VideoScriptParams:
     paragraph_number: int = Field(default=1, ge=1, le=10)
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
+    # 改造 B：套用模板时填 id；填了之后 custom_system_prompt 会被模板覆盖。
+    template_id: Optional[str] = Field(default=None, max_length=64)
 
 
 class VideoTermsParams:
@@ -374,6 +379,74 @@ class VideoMaterialUploadResponse(BaseResponse):
                 "message": "success",
                 "data": {
                     "file": "/MoneyPrinterTurbo/resource/videos/example.mp4",
+                },
+            },
+        }
+
+
+######################################################################################################
+# 改造 B：行业脚本模板（响应模型）
+######################################################################################################
+class TemplateBrief(BaseModel):
+    """模板列表返回的精简结构。"""
+
+    id: str
+    name: str
+    category: str
+    description: str
+    default_paragraph_number: int
+
+
+class TemplateDetail(TemplateBrief):
+    """单个模板详情，含 system_prompt 和 few-shot 例子。"""
+
+    system_prompt: str
+    suggested_keywords_hint: str = ""
+    few_shot_examples: List[dict] = Field(default_factory=list)
+
+
+class TemplateListResponse(BaseResponse):
+    data: Optional[dict] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": 200,
+                "message": "success",
+                "data": {
+                    "templates": [
+                        {
+                            "id": "cross_border_policy",
+                            "name": "跨境物流政策解读",
+                            "category": "policy",
+                            "description": "把跨境物流相关政策翻译成口语化解读。",
+                            "default_paragraph_number": 3,
+                        }
+                    ]
+                },
+            },
+        }
+
+
+class TemplateDetailResponse(BaseResponse):
+    data: Optional[dict] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": 200,
+                "message": "success",
+                "data": {
+                    "id": "cross_border_policy",
+                    "name": "跨境物流政策解读",
+                    "category": "policy",
+                    "description": "把跨境物流相关政策翻译成口语化解读。",
+                    "default_paragraph_number": 3,
+                    "system_prompt": "...",
+                    "suggested_keywords_hint": "政策名 + 行业关键词",
+                    "few_shot_examples": [
+                        {"subject": "示例主题", "script": "示例脚本..."}
+                    ],
                 },
             },
         }

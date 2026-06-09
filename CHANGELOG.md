@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **改造 B：行业脚本模板库** （feat/mpt-enhancement-2026q2）
+  - `app/services/prompts/templates/`：5 个跨境物流/电商行业脚本模板
+    - `cross_border_policy`（政策解读，三段式）
+    - `cloud_warehouse_promo`（云仓种草，痛点→方案→召唤）
+    - `industry_insider`（行业内幕，钩子+证据+启示+收获）
+    - `customer_case`（客户案例，背景→痛点→改变→结果）
+    - `product_compare`（对比，维度+条件式结论）
+  - `ScriptTemplate` 用 `@dataclass(frozen=True)` + `__post_init__` 字段强校验
+  - `TEMPLATE_REGISTRY` 用 `MappingProxyType` 防外部篡改
+  - `app/services/llm.py`：`list_templates()` / `load_template()` / `generate_script_from_template()` / `UnknownTemplateError`
+    - 复用现有 `generate_script()` 通道，模板只覆盖 system prompt + few-shot
+  - `app/models/schema.py`：`TemplateBrief` / `TemplateDetail` / `TemplateListResponse` / `TemplateDetailResponse`
+  - `VideoParams.template_id`、`VideoScriptParams.template_id` 字段
+  - `app/controllers/v1/llm.py`：`GET /api/v1/templates`、`GET /api/v1/templates/{id}`；`POST /api/v1/scripts` 支持 `template_id` 分支
+  - `webui/Main.py`：📋 套用行业模板下拉框 + 模板预览 + 与 custom_system_prompt 互斥
+  - `webui/i18n/{zh,en,ru,de,vi,tr,pt}.json`：3 个新 i18n key
+  - `test/services/test_templates.py`：25 个单元测试（注册表 / dataclass 校验 / LLM 接口 / schema / TestClient 端到端）
+  - 依赖：`langchain-text-splitters`（A 用预装）、`ffmpeg-python`（D 用预装）、`pytest`+`pytest-asyncio`（dev）
+
 - **本地视频素材搜索** (`app/services/material.py:search_videos_local`)
   - 扫描 `material_directory` 下的本地 `.mp4` 文件
   - 读同名 `.yaml` 描述文件的 `tags` 列表

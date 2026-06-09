@@ -1024,6 +1024,84 @@ def generate_social_metadata(
     return _fallback_social_metadata(video_subject, video_script, platform)
 
 
+# ----------------------------------------------------------------------
+# 行业脚本模板（改造 B：复用 generate_script 通道，模板只覆盖 system prompt）
+# ----------------------------------------------------------------------
+
+from app.services.prompts.templates import (  # noqa: E402  (本段在模块末尾，避免循环导入)
+    TEMPLATE_REGISTRY,
+    ScriptTemplate,
+)
+
+
+class UnknownTemplateError(KeyError):
+    """请求的模板 id 不存在。controller 层捕获后返回 404。"""
+
+
+def list_templates() -> list[ScriptTemplate]:
+    """返回所有已注册的行业脚本模板，按 id 字典序排序。"""
+    return sorted(TEMPLATE_REGISTRY.values(), key=lambda t: t.id)
+
+
+def load_template(template_id: str) -> ScriptTemplate:
+    """按 id 取模板；未注册抛 UnknownTemplateError。"""
+    try:
+        return TEMPLATE_REGISTRY[template_id]
+    except KeyError as exc:
+        raise UnknownTemplateError(
+            f"unknown script template id: {template_id!r}"
+        ) from exc
+
+
+def _render_template_system_prompt(template: ScriptTemplate) -> str:
+    """把模板 system_prompt + few-shot 例子拼成完整的 system prompt。
+
+    few-shot 例子作为参考，但要求模型按当前 subject 生成新的脚本，
+    不要照抄例子。
+    """
+    if not template.few_shot_examples:
+        return template.system_prompt
+
+    examples_block = "\n\n".join(
+        f"### Example {idx} — Subject: {ex.subject}\n{ex.script}"
+        for idx, ex in enumerate(template.few_shot_examples, start=1)
+    )
+    return (
+        f"{template.system_prompt}\n\n"
+        "## Few-shot Examples (style reference only, do NOT copy verbatim)\n\n"
+        f"{examples_block}"
+    )
+
+
+def generate_script_from_template(
+    template_id: str,
+    video_subject: str,
+    language: str = "",
+    paragraph_number: int | None = None,
+    extra_prompt: str = "",
+) -> str:
+    """套用模板生成脚本。
+
+    - `template_id`：必填，未注册时抛 UnknownTemplateError。
+    - `paragraph_number`：None 时取模板的 default_paragraph_number。
+    - `extra_prompt`：用户额外补充的要求，叠加在模板 system prompt 之后，
+      通过 `video_script_prompt` 通道传给现有 `generate_script()`。
+    """
+    template = load_template(template_id)
+    effective_paragraph = (
+        paragraph_number
+        if paragraph_number is not None
+        else template.default_paragraph_number
+    )
+    return generate_script(
+        video_subject=video_subject,
+        language=language,
+        paragraph_number=effective_paragraph,
+        video_script_prompt=extra_prompt,
+        custom_system_prompt=_render_template_system_prompt(template),
+    )
+
+
 if __name__ == "__main__":
     video_subject = "生命的意义是什么"
     script = generate_script(

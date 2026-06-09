@@ -707,13 +707,49 @@ with left_panel:
                 key="video_script_prompt",
             ).strip()
 
+            # 改造 B：套用行业脚本模板。优先级高于 custom_system_prompt。
+            template_options: list[tuple[str, str | None]] = [
+                (tr("Do not use template"), None)
+            ]
+            try:
+                available_templates = llm.list_templates()
+                template_options.extend(
+                    (f"📋 {t.name}", t.id) for t in available_templates
+                )
+            except Exception as template_load_err:  # noqa: BLE001
+                logger.warning(
+                    f"failed to load script templates: {template_load_err}"
+                )
+
+            selected_template_index = st.selectbox(
+                tr("Script Template"),
+                options=range(len(template_options)),
+                format_func=lambda i: template_options[i][0],
+                index=0,
+                key="script_template_index",
+                help=tr("Script Template Help"),
+            )
+            params.template_id = template_options[selected_template_index][1]
+
+            if params.template_id:
+                chosen_template = llm.load_template(params.template_id)
+                st.info(
+                    f"📌 {chosen_template.description}\n\n"
+                    f"建议段落数 {chosen_template.default_paragraph_number}，"
+                    f"关键词提示：{chosen_template.suggested_keywords_hint or '无'}"
+                )
+
             use_custom_system_prompt = st.checkbox(
                 tr("Use Custom System Prompt"),
                 help=tr("Use Custom System Prompt Help"),
                 key="use_custom_system_prompt",
+                disabled=bool(params.template_id),
             )
 
-            if use_custom_system_prompt:
+            if params.template_id:
+                # 模板优先：忽略 custom_system_prompt，避免双 prompt 互相覆盖。
+                params.custom_system_prompt = ""
+            elif use_custom_system_prompt:
                 custom_system_prompt = st.text_area(
                     tr("Custom System Prompt"),
                     height=240,
@@ -728,13 +764,26 @@ with left_panel:
             tr("Generate Video Script and Keywords"), key="auto_generate_script"
         ):
             with st.spinner(tr("Generating Video Script and Keywords")):
-                script = llm.generate_script(
-                    video_subject=params.video_subject,
-                    language=params.video_language,
-                    paragraph_number=params.paragraph_number,
-                    video_script_prompt=params.video_script_prompt,
-                    custom_system_prompt=params.custom_system_prompt,
-                )
+                if params.template_id:
+                    try:
+                        script = llm.generate_script_from_template(
+                            template_id=params.template_id,
+                            video_subject=params.video_subject,
+                            language=params.video_language,
+                            paragraph_number=params.paragraph_number,
+                            extra_prompt=params.video_script_prompt,
+                        )
+                    except llm.UnknownTemplateError as exc:
+                        st.error(str(exc))
+                        st.stop()
+                else:
+                    script = llm.generate_script(
+                        video_subject=params.video_subject,
+                        language=params.video_language,
+                        paragraph_number=params.paragraph_number,
+                        video_script_prompt=params.video_script_prompt,
+                        custom_system_prompt=params.custom_system_prompt,
+                    )
                 terms = llm.generate_terms(params.video_subject, script)
                 if "Error: " in script:
                     st.error(tr(script))
