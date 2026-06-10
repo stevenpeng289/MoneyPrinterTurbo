@@ -160,6 +160,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - mock 单测无法捕获（绕过了真实落盘 + preprocess 路径校验），E2E 是唯一能暴露此类集成 bug 的方式
   - 详见 `~/.claude/handoffs/mpt-real-llm-test.md`
 
+### Fixed
+
+- **改造 D：reasoning model 思考块剥除 + parse 3 次重试** (RT11 真链路 E2E 暴露, commit `4d9e6ef`)
+  - 现象：minimax-M2.7 / deepseek-r1 等 reasoning model 在 JSON 前会输出 `<think>...</think>` 思考块，旧版 `_strip_markdown_fence` 只剥 ``` 围栏，`json.loads` 直接失败
+  - 实测：5 次重跑 `tag_video` 在 `assets/6_9/*.mp4` 上只有 3/5 pass
+  - 修法 (3 处)：
+    1. `_strip_markdown_fence` 加 `re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL)`
+    2. `tag_video` 内部 parse 失败时重试 2 次 (共 3 次尝试)，log warning 不立即抛错
+    3. `render_tag_user_prompt` 末尾加硬约束 `"Output ONLY a single JSON array of strings, no other text"`
+  - 回归：`test_material_scanner.py` 28/28 pass（新增 2 个 think 块剥除单测：单独 + + markdown 围栏混合）
+  - 实测修后：5 次重跑 4/5 pass（修前 3/5）
+
+### Notes
+
+- **RT 阶段实测 (RT8-RT13) 时间线**：每个 RT 节点都跑过 minimax 真链路 E2E 验证
+  - **11:42-11:50 RT9 B 改造**：`cloud_warehouse_promo / cross_border_policy / industry_insider / customer_case / product_compare` 5 个模板各跑 1 次 minimax chat，5/5 通过，共 1637 字中文脚本，482.5s。产物 `storage/template_smoke/*.md`
+  - **11:52-12:00 RT10 A 改造**：`generate_long_storyboard` 处理 5528 字跨境物流长文，输出 12 个 EpisodeDraft（每集 60-80s），切块 2000 + overlap 200 + top_k=4。产物 `storage/rag_smoke/long_storyboard.json`
+  - **11:54-12:05 RT11 D 改造**：`tag_video` 跑 `assets/6_9/*.mp4` 4 个真实仓库视频，minimax vision 打标，3/5 暴露 thinking 块问题。修后 4/5 pass。暴露局限：minimax vision 对中文实拍场景识别差，JTHQ 办公室被错标为 "restaurant / wine glass / romantic dinner"
+  - **12:00-12:01 RT12 完整带字幕视频**：复用 RT7 v2 的 7 个 minimax mp4 片段 + edge-tts zh-CN-XiaoxiaoNeural TTS + 字幕烧录 + Ken Burns。产物 `output/美国800美元免税门槛_20260610_120322.mp4` (7.4 MB, 48s, 1920x1080)
+  - **12:55-13:00 RT13 真实素材视频**：用 `assets/6_9/` JTHQ 极通环球仓库实拍 4 mp4 + 2 jpg + B 模板 cloud_warehouse_promo 生成脚本 + edge-tts + 字幕烧录。产物 `output/JTHQ_极通环球_20260610_125944.mp4` (20 MB, 68.8s, 1920x1080)
+  - **4 改造真 LLM 全覆盖总结**：
+    - A：✅ 5528 字 → 12 episodes
+    - B：✅ 5 模板 → 1637 字脚本
+    - C：✅ 7 mp4 Ken Burns（含 1 真链路 bug fix）
+    - D：✅ 4/5 auto-tag yaml（含 1 真链路 bug fix + 1 vision 模型局限暴露）
+    - 完整带字幕视频：✅ 2 条（RT12 AI 出图 + RT13 真实素材）
+  - 详见 `~/.claude/handoffs/mpt-real-llm-test.md` + `mpt-real-llm-test-part2.md`
+
 ### Changed
 
 - **`text_background_color` 默认值统一为 `"#00000080"`** (含 alpha 通道的半透明黑)
