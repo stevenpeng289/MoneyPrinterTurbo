@@ -201,7 +201,11 @@ def render_tag_user_prompt(
         f"Filename: {filename}\n"
         f"Frames extracted: {len(frame_paths)}\n"
         f"Frame paths (for caller to attach as image inputs): {frame_paths}\n"
-        f"Tag count target: between {min_tags} and {max_tags}."
+        f"Tag count target: between {min_tags} and {max_tags}.\n"
+        # Reasoning model (e.g. minimax-M2.7) 偶发只输出思考块没出 JSON。
+        # 末尾加硬约束减少概率：必须以 JSON 数组结尾。
+        "IMPORTANT: Output ONLY a single JSON array of strings, "
+        "no other text, no explanation, no markdown fences."
     )
     if extra_context:
         base += f"\nAdditional context: {extra_context}"
@@ -212,7 +216,11 @@ def render_tag_user_prompt(
 # tag 解析
 # ---------------------------------------------------------------
 def _strip_markdown_fence(raw: str) -> str:
-    return _FENCE_RE.sub("", raw).strip()
+    cleaned = _FENCE_RE.sub("", raw).strip()
+    # Reasoning model (e.g. minimax-M2.7, deepseek-r1) 输出会带 <think>...</think>
+    # 思考块。剥掉，否则 JSON.loads 失败。
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
+    return cleaned
 
 
 def parse_tags(raw_response: str) -> Tuple[str, ...]:
@@ -378,8 +386,24 @@ def tag_video(
             frame_paths=frames,
             extra_context=extra_context,
         )
-        raw = tag_caller(TAG_SYSTEM_PROMPT, user_prompt, frames)
-        tags = parse_tags(raw)
+        # Reasoning model (e.g. minimax-M2.7) 偶发只输出思考块没出 JSON。
+        # 失败时重试 2 次 (共 3 次尝试)，仍失败才报错——
+        # 保证 auto_tagger 不因 LLM 偶发抖动挂掉。
+        last_exc: Optional[Exception] = None
+        tags: Tuple[str, ...] = ()
+        for attempt in range(1, 4):
+            try:
+                raw = tag_caller(TAG_SYSTEM_PROMPT, user_prompt, frames)
+                tags = parse_tags(raw)
+                last_exc = None
+                break
+            except TagParseError as exc:
+                last_exc = exc
+                logger.warning(
+                    f"auto_tagger: parse failed attempt {attempt}/3 ({exc})"
+                )
+        if last_exc is not None or not tags:
+            raise last_exc if last_exc else TagParseError("no tags after retries")
 
         write_tags_yaml(
             yaml_path, tags, source="auto_tagger", model=model_label

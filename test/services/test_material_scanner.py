@@ -67,6 +67,27 @@ class TestParseTags:
         with pytest.raises(at.TagParseError):
             at.parse_tags("not json at all")
 
+    def test_reasoning_model_think_block_stripped(self):
+        """minimax-M2.7 / deepseek-r1 等 reasoning model 会在 JSON 前输出
+        <think>...</think> 块。parse_tags 必须先剥掉再 json.loads。
+        """
+        raw = (
+            '<think>The user wants me to output JSON. Let me think...'
+            "I'll list warehouse, forklift, logistics.</think>\n\n"
+            '["warehouse", "forklift", "logistics"]'
+        )
+        assert at.parse_tags(raw) == ("warehouse", "forklift", "logistics")
+
+    def test_reasoning_model_think_block_with_fence(self):
+        """think 块 + markdown 围栏混合也要剥干净。"""
+        raw = (
+            "<think>reasoning here</think>\n"
+            "```json\n"
+            '["cargo box", "shipping"]\n'
+            "```"
+        )
+        assert at.parse_tags(raw) == ("cargo box", "shipping")
+
     def test_no_valid_tags_raises(self):
         with pytest.raises(at.TagParseError, match="no valid"):
             at.parse_tags('["", "  ", null]')
