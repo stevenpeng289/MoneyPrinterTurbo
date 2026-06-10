@@ -431,11 +431,12 @@ def download_images_ai(
     if not scenes:
         return []
 
-    material_directory = config.app.get("material_directory", "").strip()
-    if material_directory == "task" or not material_directory or not os.path.isdir(
-        material_directory
-    ):
-        material_directory = utils.task_dir(task_id)
+    # AI 出图统一落到 `local_videos_dir`（与 `download_videos` 对齐），
+    # 这样下游 `video.preprocess_video()` 的路径白名单能通过，不会出现
+    # "ai_image 落盘 → preprocess 全部 skip → 0 materials"的链路断裂。
+    # 历史曾用 `material_directory`，但 video.py 仅放行 `local_videos_dir`，
+    # 导致 ai_image 模式与 local_search / pexels 模式混用同一目录时跑不通。
+    material_directory = utils.storage_dir("local_videos", create=True)
 
     if select_best_caller is None and n_candidates > 1:
         try:
