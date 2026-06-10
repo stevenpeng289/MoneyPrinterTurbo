@@ -89,15 +89,19 @@ class OpenAICompatibleImageProvider:
 
     def __init__(self, provider_key: str):
         self.name = provider_key
-        api_key = config.app.get(f"{provider_key}_api_key", "")
-        base_url = config.app.get(f"{provider_key}_base_url", "") or None
+        # 别名映射：provider 名 → config.toml 前缀
+        # 例：'minimax' 在 config.toml 里实际是 'minimax_*' (历史命名)
+        config_prefix = _PROVIDER_CONFIG_PREFIX.get(provider_key, provider_key)
+        api_key = config.app.get(f"{config_prefix}_api_key", "")
+        base_url = config.app.get(f"{config_prefix}_base_url", "") or None
         # image model 名独立配置，避免和 chat model 混用
         self.model = config.app.get(
-            f"{provider_key}_image_model_name", ""
-        ) or config.app.get(f"{provider_key}_model_name", "dall-e-3")
+            f"{config_prefix}_image_model_name", ""
+        ) or config.app.get(f"{config_prefix}_model_name", "dall-e-3")
         if not api_key:
             raise ImageProviderUnavailableError(
-                f"image provider '{provider_key}' missing api key"
+                f"image provider '{provider_key}' missing api key "
+                f"(config: {config_prefix}_api_key)"
             )
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
@@ -173,6 +177,177 @@ def _persist_image(item, output_dir: str, basename: str) -> str:
 
 
 # ---------------------------------------------------------------
+# MiniMax 图像 provider (POST /v1/image_generation, 私有 schema)
+# ---------------------------------------------------------------
+class MinimaxImageProvider:
+    """Minimax 图像生成 provider。
+
+    端点：`POST {base_url}/image_generation`（注意单数，不是 OpenAI 的 /images/generations）
+    模型：`image-01`
+    请求私有字段：`aspect_ratio` / `subject_reference` / `response_format=base64`
+    响应：`{"data": {"image_base64": [str, ...]}}`
+
+    aspect_ratio 自动从 OpenAI 风格 size 推断：
+      1024x1024 → "1:1"
+      1024x1792 → "9:16"（portrait）
+      1792x1024 → "16:9"（landscape）
+    """
+
+    DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
+    name = "minimax"
+
+    def __init__(self, provider_key: str = "minimax"):
+        self.name = provider_key
+        config_prefix = _PROVIDER_CONFIG_PREFIX.get(provider_key, provider_key)
+        self.api_key = config.app.get(f"{config_prefix}_api_key", "")
+        if not self.api_key:
+            raise ImageProviderUnavailableError(
+                f"image provider '{provider_key}' missing api key "
+                f"(config: {config_prefix}_api_key)"
+            )
+        self.base_url = (
+            config.app.get(f"{config_prefix}_base_url", "")
+            or self.DEFAULT_BASE_URL
+        ).rstrip("/")
+        self.model = (
+            config.app.get(f"{config_prefix}_image_model_name", "") or "image-01"
+        )
+
+    def _size_to_aspect_ratio(self, size: str) -> str:
+        try:
+            w, h = (int(x) for x in size.lower().split("x"))
+        except (ValueError, AttributeError):
+            return "1:1"
+        if w == h:
+            return "1:1"
+        if w > h:
+            return "16:9"
+        return "9:16"
+
+    def generate(
+        self,
+        prompt: str,
+        *,
+        n: int = 1,
+        reference_images: Optional[List[str]] = None,
+        size: str = "1024x1024",
+        output_dir: Optional[str] = None,
+    ) -> List[GeneratedImage]:
+        if n < 1 or n > 9:
+            raise ValueError(f"minimax n must be in [1, 9], got {n}")
+
+        body = {
+            "model": self.model,
+            "prompt": prompt,
+            "aspect_ratio": self._size_to_aspect_ratio(size),
+            "response_format": "base64",
+            "n": n,
+        }
+        if reference_images:
+            body["subject_reference"] = [
+                {"type": "character", "image_file": ref}
+                for ref in reference_images
+            ]
+
+        endpoint = f"{self.base_url}/image_generation"
+        try:
+            resp = requests.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=120,
+            )
+        except requests.RequestException as exc:
+            raise ImageGenerationError(
+                f"{self.name}: HTTP request failed: {exc}"
+            ) from exc
+
+        if resp.status_code != 200:
+            raise ImageGenerationError(
+                f"{self.name}: HTTP {resp.status_code}: {resp.text[:300]}"
+            )
+
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            raise ImageGenerationError(
+                f"{self.name}: response not JSON: {exc}"
+            ) from exc
+
+        # Minimax 业务错误也是 200 + base_resp.status_code != 0
+        base_resp = payload.get("base_resp") or {}
+        biz_code = base_resp.get("status_code", 0)
+        if biz_code not in (0, None):
+            raise ImageGenerationError(
+                f"{self.name}: biz error {biz_code}: "
+                f"{base_resp.get('status_msg', '')[:200]}"
+            )
+
+        data = payload.get("data") or {}
+        b64_list = data.get("image_base64") or []
+        if not b64_list:
+            # 兼容 image_urls 备用通道
+            urls = data.get("image_urls") or []
+            if not urls:
+                raise ImageGenerationError(
+                    f"{self.name}: empty image_base64 and image_urls"
+                )
+            return self._persist_urls(urls, prompt, output_dir)
+
+        return self._persist_b64(b64_list, prompt, output_dir)
+
+    def _persist_b64(
+        self, b64_list: list, prompt: str, output_dir: Optional[str]
+    ) -> List[GeneratedImage]:
+        target_dir = output_dir or tempfile.mkdtemp(prefix="ai_image_")
+        os.makedirs(target_dir, exist_ok=True)
+        stamp = int(time.time())
+        results: List[GeneratedImage] = []
+        for idx, b64 in enumerate(b64_list, start=1):
+            out_path = os.path.join(
+                target_dir, f"{self.name}_{stamp}_{idx}.png"
+            )
+            with open(out_path, "wb") as f:
+                f.write(base64.b64decode(b64))
+            results.append(
+                GeneratedImage(
+                    local_path=out_path,
+                    prompt=prompt,
+                    provider=self.name,
+                )
+            )
+        return results
+
+    def _persist_urls(
+        self, urls: list, prompt: str, output_dir: Optional[str]
+    ) -> List[GeneratedImage]:
+        target_dir = output_dir or tempfile.mkdtemp(prefix="ai_image_")
+        os.makedirs(target_dir, exist_ok=True)
+        stamp = int(time.time())
+        results: List[GeneratedImage] = []
+        for idx, url in enumerate(urls, start=1):
+            r = requests.get(url, timeout=60)
+            r.raise_for_status()
+            out_path = os.path.join(
+                target_dir, f"{self.name}_{stamp}_{idx}.png"
+            )
+            with open(out_path, "wb") as f:
+                f.write(r.content)
+            results.append(
+                GeneratedImage(
+                    local_path=out_path,
+                    prompt=prompt,
+                    provider=self.name,
+                    url=url,
+                )
+            )
+        return results
+
+
+# ---------------------------------------------------------------
 # Provider 注册表
 # ---------------------------------------------------------------
 _OPENAI_COMPATIBLE_PROVIDERS = {
@@ -185,6 +360,13 @@ _OPENAI_COMPATIBLE_PROVIDERS = {
     "groq",
 }
 
+# Provider 名 → config.toml 前缀映射
+# config.toml 里 MiniMax 历史命名是 'minimax_*'（platform.minimaxi.com 来源），
+# 但代码层统一用 'minimax' 标识。这里桥接。
+_PROVIDER_CONFIG_PREFIX = {
+    "minimax": "minimax",
+}
+
 
 def get_provider(provider_key: str = "") -> ImageProvider:
     """获取指定 provider 实例；缺省时读 config.app.image_provider。"""
@@ -192,6 +374,10 @@ def get_provider(provider_key: str = "") -> ImageProvider:
     if not key:
         # 默认跟着 llm_provider 走，但要求是 OpenAI 兼容协议的
         key = (config.app.get("llm_provider", "openai") or "openai").strip()
+
+    # minimax 用私有协议，单独路由
+    if key == "minimax":
+        return MinimaxImageProvider(key)
 
     if key in _OPENAI_COMPATIBLE_PROVIDERS:
         return OpenAICompatibleImageProvider(key)
@@ -230,6 +416,7 @@ __all__ = [
     "ImageGenerationError",
     "ImageProvider",
     "ImageProviderUnavailableError",
+    "MinimaxImageProvider",
     "OpenAICompatibleImageProvider",
     "generate_image",
     "get_provider",

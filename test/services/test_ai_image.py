@@ -88,6 +88,173 @@ class TestAIImageProvider:
 
 
 # ----------------------------------------------------------------------
+# minimax 私有 schema provider
+# ----------------------------------------------------------------------
+
+
+class TestMinimaxImageProvider:
+    """minimax 走私有 schema: `POST {base}/image_generation`
+    区别于 OpenAI 的 `/images/generations`。
+    """
+
+    def _patch_config(self, **overrides):
+        defaults = {
+            "minimax_api_key": "fake_key",
+            "minimax_base_url": "https://api.minimaxi.com/v1",
+            "minimax_image_model_name": "image-01",
+        }
+        defaults.update(overrides)
+        return patch.dict(config.app, defaults)
+
+    def test_get_provider_routes_minimax(self):
+        """`image_provider=minimax` 必须路由到 MinimaxImageProvider, 不是 OpenAI 兼容类."""
+        with self._patch_config(image_provider="minimax"):
+            p = ai.get_provider("minimax")
+        assert isinstance(p, ai.MinimaxImageProvider)
+        assert p.name == "minimax"
+        assert p.model == "image-01"
+        assert p.base_url == "https://api.minimaxi.com/v1"
+
+    def test_missing_api_key_raises(self):
+        with self._patch_config(minimax_api_key=""):
+            with pytest.raises(ai.ImageProviderUnavailableError, match="minimax"):
+                ai.get_provider("minimax")
+
+    def test_size_to_aspect_ratio_mapping(self):
+        with self._patch_config():
+            p = ai.get_provider("minimax")
+        # 1:1
+        assert p._size_to_aspect_ratio("1024x1024") == "1:1"
+        # portrait
+        assert p._size_to_aspect_ratio("1024x1792") == "9:16"
+        # landscape
+        assert p._size_to_aspect_ratio("1792x1024") == "16:9"
+        # 未知格式 → 1:1 fallback
+        assert p._size_to_aspect_ratio("garbage") == "1:1"
+        # 大小写兼容
+        assert p._size_to_aspect_ratio("1024X1024") == "1:1"
+
+    def test_request_body_format(self, tmp_path):
+        """私有 schema body 字段必须正确 (model/prompt/aspect_ratio/response_format/n),
+        reference_images 必须转 subject_reference."""
+        with self._patch_config():
+            p = ai.get_provider("minimax")
+        with patch.object(ai.requests, "post") as post:
+            post.return_value.status_code = 200
+            post.return_value.json.return_value = {
+                "data": {"image_base64": ["aGVsbG8="]},  # 'hello'
+                "base_resp": {"status_code": 0, "status_msg": "ok"},
+            }
+            p.generate(
+                "a cat",
+                n=2,
+                size="1024x1024",
+                reference_images=["/tmp/ref1.png", "/tmp/ref2.png"],
+                output_dir=str(tmp_path),
+            )
+        # 抓请求
+        assert post.call_count == 1
+        url = post.call_args.args[0]
+        body = post.call_args.kwargs["json"]
+        # 端点是私有 schema, 不是 OpenAI /images/generations
+        assert url == "https://api.minimaxi.com/v1/image_generation"
+        # body 字段
+        assert body["model"] == "image-01"
+        assert body["prompt"] == "a cat"
+        assert body["aspect_ratio"] == "1:1"
+        assert body["response_format"] == "base64"
+        assert body["n"] == 2
+        # reference_images 转换
+        assert body["subject_reference"] == [
+            {"type": "character", "image_file": "/tmp/ref1.png"},
+            {"type": "character", "image_file": "/tmp/ref2.png"},
+        ]
+        # auth header
+        headers = post.call_args.kwargs["headers"]
+        assert headers["Authorization"] == "Bearer fake_key"
+
+    def test_http_error_raises(self, tmp_path):
+        with self._patch_config():
+            p = ai.get_provider("minimax")
+        with patch.object(ai.requests, "post") as post:
+            post.return_value.status_code = 401
+            post.return_value.text = "unauthorized"
+            with pytest.raises(ai.ImageGenerationError, match="HTTP 401"):
+                p.generate("x", n=1, output_dir=str(tmp_path))
+
+    def test_business_error_raises(self, tmp_path):
+        """HTTP 200 但 base_resp.status_code != 0 视为业务失败."""
+        with self._patch_config():
+            p = ai.get_provider("minimax")
+        with patch.object(ai.requests, "post") as post:
+            post.return_value.status_code = 200
+            post.return_value.json.return_value = {
+                "data": {"image_base64": ["aGVsbG8="]},
+                "base_resp": {"status_code": 1001, "status_msg": "rate limited"},
+            }
+            with pytest.raises(ai.ImageGenerationError, match="biz error 1001"):
+                p.generate("x", n=1, output_dir=str(tmp_path))
+
+    def test_persists_b64_response(self, tmp_path):
+        """image_base64 数组正确解码落盘."""
+        with self._patch_config():
+            p = ai.get_provider("minimax")
+        with patch.object(ai.requests, "post") as post:
+            post.return_value.status_code = 200
+            post.return_value.json.return_value = {
+                "data": {"image_base64": ["aGVsbG8=", "d29ybGQ="]},  # 'hello' / 'world'
+                "base_resp": {"status_code": 0, "status_msg": "ok"},
+            }
+            imgs = p.generate("x", n=2, output_dir=str(tmp_path))
+        assert len(imgs) == 2
+        assert Path(imgs[0].local_path).read_bytes() == b"hello"
+        assert Path(imgs[1].local_path).read_bytes() == b"world"
+        assert imgs[0].provider == "minimax"
+        # 文件名带 minimax_ 前缀
+        for img in imgs:
+            assert Path(img.local_path).name.startswith("minimax_")
+
+    def test_fallback_to_image_urls(self, tmp_path):
+        """没有 image_base64 但有 image_urls 时走 URL 下载通道."""
+        with self._patch_config():
+            p = ai.get_provider("minimax")
+        with patch.object(ai.requests, "post") as post, \
+             patch.object(ai.requests, "get") as get:
+            post.return_value.status_code = 200
+            post.return_value.json.return_value = {
+                "data": {"image_urls": ["https://cdn.example.com/a.png"]},
+                "base_resp": {"status_code": 0, "status_msg": "ok"},
+            }
+            get.return_value.status_code = 200
+            get.return_value.content = b"url-bytes"
+            imgs = p.generate("x", n=1, output_dir=str(tmp_path))
+        assert len(imgs) == 1
+        assert Path(imgs[0].local_path).read_bytes() == b"url-bytes"
+        assert imgs[0].url == "https://cdn.example.com/a.png"
+
+    def test_empty_both_raises(self, tmp_path):
+        with self._patch_config():
+            p = ai.get_provider("minimax")
+        with patch.object(ai.requests, "post") as post:
+            post.return_value.status_code = 200
+            post.return_value.json.return_value = {
+                "data": {},
+                "base_resp": {"status_code": 0, "status_msg": "ok"},
+            }
+            with pytest.raises(ai.ImageGenerationError, match="empty"):
+                p.generate("x", n=1, output_dir=str(tmp_path))
+
+    def test_n_range_validated(self, tmp_path):
+        """minimax n 限制 [1, 9], 跟 OpenAI 的 [1, 10] 不同."""
+        with self._patch_config():
+            p = ai.get_provider("minimax")
+        with pytest.raises(ValueError, match="minimax n must be in"):
+            p.generate("x", n=0, output_dir=str(tmp_path))
+        with pytest.raises(ValueError, match="minimax n must be in"):
+            p.generate("x", n=10, output_dir=str(tmp_path))
+
+
+# ----------------------------------------------------------------------
 # storyboard
 # ----------------------------------------------------------------------
 
