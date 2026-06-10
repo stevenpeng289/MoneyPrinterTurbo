@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - 支持 openai / aihubmix / minimax（MiniMax）/ oneapi / moonshot / deepseek / groq 等 OpenAI 兼容协议
     - 帧 base64 inline 落盘，零外网依赖
     - 错误体系：`AIImageError` / `ImageProviderUnavailableError` / `ImageGenerationError`
+  - `app/services/ai_image.py`：`MinimaxImageProvider` 私有 schema 适配 (RT1-RT3 补完)
+    - 端点：`POST {base_url}/image_generation`（注意单数，非 OpenAI 的 `/images/generations`）
+    - 私有 body 字段：`aspect_ratio`（自动从 size 推断 1:1 / 9:16 / 16:9）/ `subject_reference` / `response_format=base64`
+    - 响应：`{"data": {"image_base64": [...]}}` + `base_resp.status_code != 0` 业务错误识别
+    - `n` 范围 `[1, 9]`（区别 OpenAI 的 `[1, 10]`）
+    - `_PROVIDER_CONFIG_PREFIX = {"minimax": "minimax"}` 桥接历史 `config.toml` 命名（`platform.minimaxi.com` 来源）
+    - `image_base64` + `image_urls` 双通道落盘，base64 decode 失败 fallback 到 URL 下载
+  - `test/services/test_ai_image.py`：新增 10 个 `TestMinimaxImageProvider` 单元测试
+    - 路由分发 / 缺 key 报错 / `size→aspect_ratio` 4 个 case（含 garbage fallback）
+    - body 字段完整断言 / `reference_images→subject_reference` 转换
+    - HTTP 4xx/5xx 错误 / `base_resp.status_code != 0` 业务错误
+    - b64 落盘 + 文件名带 `minimax_` 前缀 / `image_urls` fallback / n 范围
   - `app/services/storyboard.py`：脚本 → 分镜拆分
     - 每个 scene 含 narration / visual_desc / image_prompt / keywords / target_duration
     - `Scene` 用 `@dataclass(frozen=True)`，duration 自动 clamp [2, 15]
@@ -138,6 +150,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 文件名清洗非法字符 `\/:*?"<>|` → `_`
   - `video_count > 1` 时加 `_<index>` 后缀
   - 时间戳格式：`YYYYMMDD_HHMMSS`
+
+### Fixed
+
+- **改造 C：`download_images_ai` 落盘与 `preprocess_video` 路径白名单对齐** (RT7 真链路 E2E 暴露)
+  - 旧版用 `config.app.material_directory` 落 AI 出图，但 `video.preprocess_video` 走 `file_security.resolve_path_within_directory` 路径白名单只放行 `storage/local_videos`，导致 ai_image 模式跑 `task.get_video_materials` 时 `preprocess_video` 全部 skip `"path is outside the allowed directory"` → 0 materials → task 失败
+  - 改：AI 出图统一落 `utils.storage_dir("local_videos", create=True)`，跟 `download_videos` 对齐
+  - `material_directory` 配置对 local_search / 人工上传素材仍生效，互不冲突
+  - mock 单测无法捕获（绕过了真实落盘 + preprocess 路径校验），E2E 是唯一能暴露此类集成 bug 的方式
+  - 详见 `~/.claude/handoffs/mpt-real-llm-test.md`
 
 ### Changed
 
