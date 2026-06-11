@@ -150,6 +150,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 文件名清洗非法字符 `\/:*?"<>|` → `_`
   - `video_count > 1` 时加 `_<index>` 后缀
   - 时间戳格式：`YYYYMMDD_HHMMSS`
+  - 时间：2026-06-09 22:49（7e4824c · 拆分镜）
+  - 时间：2026-06-09 22:41（c745b82 · 本地素材库智能化）
+  - 时间：2026-06-09 22:34（49cb59e · RAG）
+  - 时间：2026-06-09 22:28（f5a391e · 行业脚本模板）
+  - 时间：2026-06-09 21:23（f685aae · 本地视频搜索）
+  - 时间：2026-06-09 21:23（f685aae · 环境变量占位符）
+  - 时间：2026-06-09 21:23（f685aae · output_dir）
+  - 时间：2026-06-09 21:23（f685aae · 持久化到）
 
 ### Fixed
 
@@ -159,6 +167,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `material_directory` 配置对 local_search / 人工上传素材仍生效，互不冲突
   - mock 单测无法捕获（绕过了真实落盘 + preprocess 路径校验），E2E 是唯一能暴露此类集成 bug 的方式
   - 详见 `~/.claude/handoffs/mpt-real-llm-test.md`
+  - 时间：2026-06-10 10:53（17bda39 · download_images_ai）
 
 ### Fixed
 
@@ -171,6 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     3. `render_tag_user_prompt` 末尾加硬约束 `"Output ONLY a single JSON array of strings, no other text"`
   - 回归：`test_material_scanner.py` 28/28 pass（新增 2 个 think 块剥除单测：单独 + + markdown 围栏混合）
   - 实测修后：5 次重跑 4/5 pass（修前 3/5）
+  - 时间：2026-06-10 12:05（4d9e6ef · reasoning model）
 
 ### Notes
 
@@ -187,6 +197,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - D：✅ 4/5 auto-tag yaml（含 1 真链路 bug fix + 1 vision 模型局限暴露）
     - 完整带字幕视频：✅ 2 条（RT12 AI 出图 + RT13 真实素材）
   - 详见 `~/.claude/handoffs/mpt-real-llm-test.md` + `mpt-real-llm-test-part2.md`
+  - 时间：2026-06-10 15:11（20207b9 · RT8-RT13）
 
 ### Changed
 
@@ -195,6 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `app/models/schema.py`：`SubtitleRequest.text_background_color` 默认 `True` → `"#00000080"`
   - `app/services/video.py:generate_video`：布尔值兼容路径同步从 `"#000000"` 改为 `"#00000080"`
   - 视觉效果：默认开启半透明黑色字幕底板（替代原本的纯黑底板）
+  - 时间：2026-06-09 21:23（f685aae · text_background_color）
 
 ### Notes
 
